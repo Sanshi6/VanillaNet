@@ -1,8 +1,8 @@
-#Copyright (C) 2023. Huawei Technologies Co., Ltd. All rights reserved.
+# Copyright (C) 2023. Huawei Technologies Co., Ltd. All rights reserved.
 
-#This program is free software; you can redistribute it and/or modify it under the terms of the MIT License.
+# This program is free software; you can redistribute it and/or modify it under the terms of the MIT License.
 
-#This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the MIT License for more details.
+# This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the MIT License for more details.
 
 import torch
 import torch.nn as nn
@@ -15,7 +15,7 @@ class activation(nn.ReLU):
     def __init__(self, dim, act_num=3, deploy=False):
         super(activation, self).__init__()
         self.deploy = deploy
-        self.weight = torch.nn.Parameter(torch.randn(dim, 1, act_num*2 + 1, act_num*2 + 1))
+        self.weight = torch.nn.Parameter(torch.randn(dim, 1, act_num * 2 + 1, act_num * 2 + 1))
         self.bias = None
         self.bn = nn.BatchNorm2d(dim, eps=1e-6)
         self.dim = dim
@@ -25,12 +25,12 @@ class activation(nn.ReLU):
     def forward(self, x):
         if self.deploy:
             return torch.nn.functional.conv2d(
-                super(activation, self).forward(x), 
-                self.weight, self.bias, padding=(self.act_num*2 + 1)//2, groups=self.dim)
+                super(activation, self).forward(x),
+                self.weight, self.bias, padding=(self.act_num * 2 + 1) // 2, groups=self.dim)
         else:
             return self.bn(torch.nn.functional.conv2d(
                 super(activation, self).forward(x),
-                self.weight, padding=(self.act_num*2 + 1)//2, groups=self.dim))
+                self.weight, padding=(self.act_num * 2 + 1) // 2, groups=self.dim))
 
     def _fuse_bn_tensor(self, weight, bn):
         kernel = weight
@@ -42,7 +42,7 @@ class activation(nn.ReLU):
         std = (running_var + eps).sqrt()
         t = (gamma / std).reshape(-1, 1, 1, 1)
         return kernel * t, beta + (0 - running_mean) * gamma / std
-    
+
     def switch_to_deploy(self):
         kernel, bias = self._fuse_bn_tensor(self.weight, self.bn)
         self.weight.data = kernel
@@ -75,13 +75,13 @@ class Block(nn.Module):
             self.pool = nn.Identity() if stride == 1 else nn.AdaptiveMaxPool2d((ada_pool, ada_pool))
 
         self.act = activation(dim_out, act_num)
- 
+
     def forward(self, x):
         if self.deploy:
             x = self.conv(x)
         else:
             x = self.conv1(x)
-            x = torch.nn.functional.leaky_relu(x,self.act_learn)
+            x = torch.nn.functional.leaky_relu(x, self.act_learn)
             x = self.conv2(x)
 
         x = self.pool(x)
@@ -99,7 +99,7 @@ class Block(nn.Module):
         std = (running_var + eps).sqrt()
         t = (gamma / std).reshape(-1, 1, 1, 1)
         return kernel * t, beta + (bias - running_mean) * gamma / std
-    
+
     def switch_to_deploy(self):
         kernel, bias = self._fuse_bn_tensor(self.conv1[0], self.conv1[1])
         self.conv1[0].weight.data = kernel
@@ -107,17 +107,19 @@ class Block(nn.Module):
         # kernel, bias = self.conv2[0].weight.data, self.conv2[0].bias.data
         kernel, bias = self._fuse_bn_tensor(self.conv2[0], self.conv2[1])
         self.conv = self.conv2[0]
-        self.conv.weight.data = torch.matmul(kernel.transpose(1,3), self.conv1[0].weight.data.squeeze(3).squeeze(2)).transpose(1,3)
-        self.conv.bias.data = bias + (self.conv1[0].bias.data.view(1,-1,1,1)*kernel).sum(3).sum(2).sum(1)
+        self.conv.weight.data = torch.matmul(kernel.transpose(1, 3),
+                                             self.conv1[0].weight.data.squeeze(3).squeeze(2)).transpose(1, 3)
+        self.conv.bias.data = bias + (self.conv1[0].bias.data.view(1, -1, 1, 1) * kernel).sum(3).sum(2).sum(1)
         self.__delattr__('conv1')
         self.__delattr__('conv2')
         self.act.switch_to_deploy()
         self.deploy = True
-    
 
+
+# act_num?
 class VanillaNet(nn.Module):
-    def __init__(self, in_chans=3, num_classes=1000, dims=[96, 192, 384, 768], 
-                 drop_rate=0, act_num=3, strides=[2,2,2,1], deploy=False, ada_pool=None, **kwargs):
+    def __init__(self, in_chans=3, num_classes=1000, dims=[96, 192, 384, 768],
+                 drop_rate=0, act_num=3, strides=[2, 2, 2, 1], deploy=False, ada_pool=None, **kwargs):
         super().__init__()
         self.deploy = deploy
         if self.deploy:
@@ -141,21 +143,22 @@ class VanillaNet(nn.Module):
         self.stages = nn.ModuleList()
         for i in range(len(strides)):
             if not ada_pool:
-                stage = Block(dim=dims[i], dim_out=dims[i+1], act_num=act_num, stride=strides[i], deploy=deploy)
+                stage = Block(dim=dims[i], dim_out=dims[i + 1], act_num=act_num, stride=strides[i], deploy=deploy)
             else:
-                stage = Block(dim=dims[i], dim_out=dims[i+1], act_num=act_num, stride=strides[i], deploy=deploy, ada_pool=ada_pool[i])
+                stage = Block(dim=dims[i], dim_out=dims[i + 1], act_num=act_num, stride=strides[i], deploy=deploy,
+                              ada_pool=ada_pool[i])
             self.stages.append(stage)
         self.depth = len(strides)
 
         if self.deploy:
             self.cls = nn.Sequential(
-                nn.AdaptiveAvgPool2d((1,1)),
+                nn.AdaptiveAvgPool2d((1, 1)),
                 nn.Dropout(drop_rate),
                 nn.Conv2d(dims[-1], num_classes, 1),
             )
         else:
             self.cls1 = nn.Sequential(
-                nn.AdaptiveAvgPool2d((1,1)),
+                nn.AdaptiveAvgPool2d((1, 1)),
                 nn.Dropout(drop_rate),
                 nn.Conv2d(dims[-1], num_classes, 1),
                 nn.BatchNorm2d(num_classes, eps=1e-6),
@@ -163,7 +166,7 @@ class VanillaNet(nn.Module):
             self.cls2 = nn.Sequential(
                 nn.Conv2d(num_classes, num_classes, 1)
             )
-        
+
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -181,7 +184,7 @@ class VanillaNet(nn.Module):
             x = self.stem(x)
         else:
             x = self.stem1(x)
-            x = torch.nn.functional.leaky_relu(x,self.act_learn)
+            x = torch.nn.functional.leaky_relu(x, self.act_learn)
             x = self.stem2(x)
 
         for i in range(self.depth):
@@ -191,9 +194,9 @@ class VanillaNet(nn.Module):
             x = self.cls(x)
         else:
             x = self.cls1(x)
-            x = torch.nn.functional.leaky_relu(x,self.act_learn)
+            x = torch.nn.functional.leaky_relu(x, self.act_learn)
             x = self.cls2(x)
-        return x.view(x.size(0),-1)
+        return x.view(x.size(0), -1)
 
     def _fuse_bn_tensor(self, conv, bn):
         kernel = conv.weight
@@ -206,15 +209,18 @@ class VanillaNet(nn.Module):
         std = (running_var + eps).sqrt()
         t = (gamma / std).reshape(-1, 1, 1, 1)
         return kernel * t, beta + (bias - running_mean) * gamma / std
-    
+
     def switch_to_deploy(self):
+        # TODO: 1 * 1 conv merge -> 3 * 3 ?
         self.stem2[2].switch_to_deploy()
         kernel, bias = self._fuse_bn_tensor(self.stem1[0], self.stem1[1])
         self.stem1[0].weight.data = kernel
         self.stem1[0].bias.data = bias
         kernel, bias = self._fuse_bn_tensor(self.stem2[0], self.stem2[1])
-        self.stem1[0].weight.data = torch.einsum('oi,icjk->ocjk', kernel.squeeze(3).squeeze(2), self.stem1[0].weight.data)
-        self.stem1[0].bias.data = bias + (self.stem1[0].bias.data.view(1,-1,1,1)*kernel).sum(3).sum(2).sum(1)
+        # TODO: understand it, very important!
+        self.stem1[0].weight.data = torch.einsum('oi,icjk->ocjk', kernel.squeeze(3).squeeze(2),
+                                                 self.stem1[0].weight.data)
+        self.stem1[0].bias.data = bias + (self.stem1[0].bias.data.view(1, -1, 1, 1) * kernel).sum(3).sum(2).sum(1)
         self.stem = torch.nn.Sequential(*[self.stem1[0], self.stem2[2]])
         self.__delattr__('stem1')
         self.__delattr__('stem2')
@@ -226,8 +232,9 @@ class VanillaNet(nn.Module):
         self.cls1[2].weight.data = kernel
         self.cls1[2].bias.data = bias
         kernel, bias = self.cls2[0].weight.data, self.cls2[0].bias.data
-        self.cls1[2].weight.data = torch.matmul(kernel.transpose(1,3), self.cls1[2].weight.data.squeeze(3).squeeze(2)).transpose(1,3)
-        self.cls1[2].bias.data = bias + (self.cls1[2].bias.data.view(1,-1,1,1)*kernel).sum(3).sum(2).sum(1)
+        self.cls1[2].weight.data = torch.matmul(kernel.transpose(1, 3),
+                                                self.cls1[2].weight.data.squeeze(3).squeeze(2)).transpose(1, 3)
+        self.cls1[2].bias.data = bias + (self.cls1[2].bias.data.view(1, -1, 1, 1) * kernel).sum(3).sum(2).sum(1)
         self.cls = torch.nn.Sequential(*self.cls1[0:3])
         self.__delattr__('cls1')
         self.__delattr__('cls2')
@@ -235,75 +242,200 @@ class VanillaNet(nn.Module):
 
 
 @register_model
-def vanillanet_5(pretrained=False,in_22k=False, **kwargs):
-    model = VanillaNet(dims=[128*4, 256*4, 512*4, 1024*4], strides=[2,2,2], **kwargs)
+def vanillanet_5(pretrained=False, in_22k=False, **kwargs):
+    model = VanillaNet(dims=[128 * 4, 256 * 4, 512 * 4, 1024 * 4], strides=[2, 2, 2], **kwargs)
     return model
 
-@register_model
-def vanillanet_6(pretrained=False,in_22k=False, **kwargs):
-    model = VanillaNet(dims=[128*4, 256*4, 512*4, 1024*4, 1024*4], strides=[2,2,2,1], **kwargs)
-    return model
 
 @register_model
-def vanillanet_7(pretrained=False,in_22k=False, **kwargs):
-    model = VanillaNet(dims=[128*4, 128*4, 256*4, 512*4, 1024*4, 1024*4], strides=[1,2,2,2,1], **kwargs)
+def vanillanet_6(pretrained=False, in_22k=False, **kwargs):
+    model = VanillaNet(dims=[128 * 4, 256 * 4, 512 * 4, 1024 * 4, 1024 * 4], strides=[2, 2, 2, 1], **kwargs)
     return model
+
+
+@register_model
+def vanillanet_7(pretrained=False, in_22k=False, **kwargs):
+    model = VanillaNet(dims=[128 * 4, 128 * 4, 256 * 4, 512 * 4, 1024 * 4, 1024 * 4], strides=[1, 2, 2, 2, 1], **kwargs)
+    return model
+
 
 @register_model
 def vanillanet_8(pretrained=False, in_22k=False, **kwargs):
-    model = VanillaNet(dims=[128*4, 128*4, 256*4, 512*4, 512*4, 1024*4, 1024*4], strides=[1,2,2,1,2,1], **kwargs)
+    model = VanillaNet(dims=[128 * 4, 128 * 4, 256 * 4, 512 * 4, 512 * 4, 1024 * 4, 1024 * 4],
+                       strides=[1, 2, 2, 1, 2, 1], **kwargs)
     return model
+
 
 @register_model
 def vanillanet_9(pretrained=False, in_22k=False, **kwargs):
-    model = VanillaNet(dims=[128*4, 128*4, 256*4, 512*4, 512*4, 512*4, 1024*4, 1024*4], strides=[1,2,2,1,1,2,1], **kwargs)
+    model = VanillaNet(dims=[128 * 4, 128 * 4, 256 * 4, 512 * 4, 512 * 4, 512 * 4, 1024 * 4, 1024 * 4],
+                       strides=[1, 2, 2, 1, 1, 2, 1], **kwargs)
     return model
+
 
 @register_model
 def vanillanet_10(pretrained=False, in_22k=False, **kwargs):
     model = VanillaNet(
-        dims=[128*4, 128*4, 256*4, 512*4, 512*4, 512*4, 512*4, 1024*4, 1024*4],
-        strides=[1,2,2,1,1,1,2,1],
+        dims=[128 * 4, 128 * 4, 256 * 4, 512 * 4, 512 * 4, 512 * 4, 512 * 4, 1024 * 4, 1024 * 4],
+        strides=[1, 2, 2, 1, 1, 1, 2, 1],
         **kwargs)
     return model
+
 
 @register_model
 def vanillanet_11(pretrained=False, in_22k=False, **kwargs):
     model = VanillaNet(
-        dims=[128*4, 128*4, 256*4, 512*4, 512*4, 512*4, 512*4, 512*4, 1024*4, 1024*4],
-        strides=[1,2,2,1,1,1,1,2,1],
+        dims=[128 * 4, 128 * 4, 256 * 4, 512 * 4, 512 * 4, 512 * 4, 512 * 4, 512 * 4, 1024 * 4, 1024 * 4],
+        strides=[1, 2, 2, 1, 1, 1, 1, 2, 1],
         **kwargs)
     return model
+
 
 @register_model
 def vanillanet_12(pretrained=False, in_22k=False, **kwargs):
     model = VanillaNet(
-        dims=[128*4, 128*4, 256*4, 512*4, 512*4, 512*4, 512*4, 512*4, 512*4, 1024*4, 1024*4],
-        strides=[1,2,2,1,1,1,1,1,2,1],
+        dims=[128 * 4, 128 * 4, 256 * 4, 512 * 4, 512 * 4, 512 * 4, 512 * 4, 512 * 4, 512 * 4, 1024 * 4, 1024 * 4],
+        strides=[1, 2, 2, 1, 1, 1, 1, 1, 2, 1],
         **kwargs)
     return model
+
 
 @register_model
 def vanillanet_13(pretrained=False, in_22k=False, **kwargs):
     model = VanillaNet(
-        dims=[128*4, 128*4, 256*4, 512*4, 512*4, 512*4, 512*4, 512*4, 512*4, 512*4, 1024*4, 1024*4],
-        strides=[1,2,2,1,1,1,1,1,1,2,1],
+        dims=[128 * 4, 128 * 4, 256 * 4, 512 * 4, 512 * 4, 512 * 4, 512 * 4, 512 * 4, 512 * 4, 512 * 4, 1024 * 4,
+              1024 * 4],
+        strides=[1, 2, 2, 1, 1, 1, 1, 1, 1, 2, 1],
         **kwargs)
     return model
+
 
 @register_model
 def vanillanet_13_x1_5(pretrained=False, in_22k=False, **kwargs):
     model = VanillaNet(
-        dims=[128*6, 128*6, 256*6, 512*6, 512*6, 512*6, 512*6, 512*6, 512*6, 512*6, 1024*6, 1024*6],
-        strides=[1,2,2,1,1,1,1,1,1,2,1],
+        dims=[128 * 6, 128 * 6, 256 * 6, 512 * 6, 512 * 6, 512 * 6, 512 * 6, 512 * 6, 512 * 6, 512 * 6, 1024 * 6,
+              1024 * 6],
+        strides=[1, 2, 2, 1, 1, 1, 1, 1, 1, 2, 1],
         **kwargs)
     return model
+
 
 @register_model
 def vanillanet_13_x1_5_ada_pool(pretrained=False, in_22k=False, **kwargs):
     model = VanillaNet(
-        dims=[128*6, 128*6, 256*6, 512*6, 512*6, 512*6, 512*6, 512*6, 512*6, 512*6, 1024*6, 1024*6],
-        strides=[1,2,2,1,1,1,1,1,1,2,1],
-        ada_pool=[0,40,20,0,0,0,0,0,0,10,0],
+        dims=[128 * 6, 128 * 6, 256 * 6, 512 * 6, 512 * 6, 512 * 6, 512 * 6, 512 * 6, 512 * 6, 512 * 6, 1024 * 6,
+              1024 * 6],
+        strides=[1, 2, 2, 1, 1, 1, 1, 1, 1, 2, 1],
+        ada_pool=[0, 40, 20, 0, 0, 0, 0, 0, 0, 10, 0],
         **kwargs)
     return model
+
+
+if __name__ == '__main__':
+    net = vanillanet_5()
+    net.eval()
+    input = torch.rand([1, 3, 127, 127])
+    val1 = net(input)
+    net.switch_to_deploy()
+    val2 = net(input)
+    print((val1 - val2))
+
+"""
+VanillaNet(
+  (stages): ModuleList(
+    (0): Block(
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (act): activation()
+      (conv): Conv2d(512, 1024, kernel_size=(1, 1), stride=(1, 1))
+    )
+    (1): Block(
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (act): activation()
+      (conv): Conv2d(1024, 2048, kernel_size=(1, 1), stride=(1, 1))
+    )
+    (2): Block(
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (act): activation()
+      (conv): Conv2d(2048, 4096, kernel_size=(1, 1), stride=(1, 1))
+    )
+  )
+  (stem): Sequential(
+    (0): Conv2d(3, 512, kernel_size=(4, 4), stride=(4, 4))
+    (1): activation()
+  )
+  (cls): Sequential(
+    (0): AdaptiveAvgPool2d(output_size=(1, 1))
+    (1): Dropout(p=0, inplace=False)
+    (2): Conv2d(4096, 1000, kernel_size=(1, 1), stride=(1, 1))
+  )
+)
+"""
+
+"""
+VanillaNet(
+  (stem1): Sequential(
+    (0): Conv2d(3, 512, kernel_size=(4, 4), stride=(4, 4))
+    (1): BatchNorm2d(512, eps=1e-06, momentum=0.1, affine=True, track_running_stats=True)
+  )
+  (stem2): Sequential(
+    (0): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+    (1): BatchNorm2d(512, eps=1e-06, momentum=0.1, affine=True, track_running_stats=True)
+    (2): activation(
+      (bn): BatchNorm2d(512, eps=1e-06, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+  (stages): ModuleList(
+    (0): Block(
+      (conv1): Sequential(
+        (0): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+        (1): BatchNorm2d(512, eps=1e-06, momentum=0.1, affine=True, track_running_stats=True)
+      )
+      (conv2): Sequential(
+        (0): Conv2d(512, 1024, kernel_size=(1, 1), stride=(1, 1))
+        (1): BatchNorm2d(1024, eps=1e-06, momentum=0.1, affine=True, track_running_stats=True)
+      )
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (act): activation(
+        (bn): BatchNorm2d(1024, eps=1e-06, momentum=0.1, affine=True, track_running_stats=True)
+      )
+    )
+    (1): Block(
+      (conv1): Sequential(
+        (0): Conv2d(1024, 1024, kernel_size=(1, 1), stride=(1, 1))
+        (1): BatchNorm2d(1024, eps=1e-06, momentum=0.1, affine=True, track_running_stats=True)
+      )
+      (conv2): Sequential(
+        (0): Conv2d(1024, 2048, kernel_size=(1, 1), stride=(1, 1))
+        (1): BatchNorm2d(2048, eps=1e-06, momentum=0.1, affine=True, track_running_stats=True)
+      )
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (act): activation(
+        (bn): BatchNorm2d(2048, eps=1e-06, momentum=0.1, affine=True, track_running_stats=True)
+      )
+    )
+    (2): Block(
+      (conv1): Sequential(
+        (0): Conv2d(2048, 2048, kernel_size=(1, 1), stride=(1, 1))
+        (1): BatchNorm2d(2048, eps=1e-06, momentum=0.1, affine=True, track_running_stats=True)
+      )
+      (conv2): Sequential(
+        (0): Conv2d(2048, 4096, kernel_size=(1, 1), stride=(1, 1))
+        (1): BatchNorm2d(4096, eps=1e-06, momentum=0.1, affine=True, track_running_stats=True)
+      )
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+      (act): activation(
+        (bn): BatchNorm2d(4096, eps=1e-06, momentum=0.1, affine=True, track_running_stats=True)
+      )
+    )
+  )
+  (cls1): Sequential(
+    (0): AdaptiveAvgPool2d(output_size=(1, 1))
+    (1): Dropout(p=0, inplace=False)
+    (2): Conv2d(4096, 1000, kernel_size=(1, 1), stride=(1, 1))
+    (3): BatchNorm2d(1000, eps=1e-06, momentum=0.1, affine=True, track_running_stats=True)
+  )
+  (cls2): Sequential(
+    (0): Conv2d(1000, 1000, kernel_size=(1, 1), stride=(1, 1))
+  )
+)
+"""
