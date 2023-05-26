@@ -11,6 +11,8 @@ from timm.models.layers import weight_init, DropPath
 from timm.models.registry import register_model
 
 
+# activation function seem is conv2d + bn + relu, deploy is conv2d fuse bn -> conv2d + bn, why?
+# padding is 3, why? to refer paper.
 class activation(nn.ReLU):
     def __init__(self, dim, act_num=3, deploy=False):
         super(activation, self).__init__()
@@ -52,6 +54,7 @@ class activation(nn.ReLU):
         self.deploy = True
 
 
+# block, important: self.act_learn
 class Block(nn.Module):
     def __init__(self, dim, dim_out, act_num=3, stride=2, deploy=False, ada_pool=None):
         super().__init__()
@@ -69,17 +72,20 @@ class Block(nn.Module):
                 nn.BatchNorm2d(dim_out, eps=1e-6)
             )
 
+        # per stage stride = 2, nn.MaxPool2d(2)
         if not ada_pool:
             self.pool = nn.Identity() if stride == 1 else nn.MaxPool2d(stride)
         else:
             self.pool = nn.Identity() if stride == 1 else nn.AdaptiveMaxPool2d((ada_pool, ada_pool))
 
+        # activation? not understanding. above all: act_num
         self.act = activation(dim_out, act_num)
 
     def forward(self, x):
         if self.deploy:
             x = self.conv(x)
         else:
+            # x = torch.nn.functional.leaky_relu(x, self.act_learn)?, act_learn, alternative by train proceed.
             x = self.conv1(x)
             x = torch.nn.functional.leaky_relu(x, self.act_learn)
             x = self.conv2(x)
@@ -107,11 +113,14 @@ class Block(nn.Module):
         # kernel, bias = self.conv2[0].weight.data, self.conv2[0].bias.data
         kernel, bias = self._fuse_bn_tensor(self.conv2[0], self.conv2[1])
         self.conv = self.conv2[0]
+        # new conv, but update by self.conv2
+        # fuse 1*1 and 1*1
         self.conv.weight.data = torch.matmul(kernel.transpose(1, 3),
                                              self.conv1[0].weight.data.squeeze(3).squeeze(2)).transpose(1, 3)
         self.conv.bias.data = bias + (self.conv1[0].bias.data.view(1, -1, 1, 1) * kernel).sum(3).sum(2).sum(1)
         self.__delattr__('conv1')
         self.__delattr__('conv2')
+        # switch activation to deploy, but i no sense.
         self.act.switch_to_deploy()
         self.deploy = True
 
@@ -128,6 +137,7 @@ class VanillaNet(nn.Module):
                 activation(dims[0], act_num)
             )
         else:
+            # self.stem2: activation, put it to stem2 out.
             self.stem1 = nn.Sequential(
                 nn.Conv2d(in_chans, dims[0], kernel_size=4, stride=4),
                 nn.BatchNorm2d(dims[0], eps=1e-6),
@@ -140,6 +150,7 @@ class VanillaNet(nn.Module):
 
         self.act_learn = 1
 
+        # stage is num to block
         self.stages = nn.ModuleList()
         for i in range(len(strides)):
             if not ada_pool:
@@ -150,6 +161,7 @@ class VanillaNet(nn.Module):
             self.stages.append(stage)
         self.depth = len(strides)
 
+        # cls, it also conv2d -> bn -> conv2d, and fuse it.
         if self.deploy:
             self.cls = nn.Sequential(
                 nn.AdaptiveAvgPool2d((1, 1)),
@@ -167,6 +179,7 @@ class VanillaNet(nn.Module):
                 nn.Conv2d(num_classes, num_classes, 1)
             )
 
+        # initial weights
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -211,13 +224,11 @@ class VanillaNet(nn.Module):
         return kernel * t, beta + (bias - running_mean) * gamma / std
 
     def switch_to_deploy(self):
-        # TODO: 1 * 1 conv merge -> 3 * 3 ?
         self.stem2[2].switch_to_deploy()
         kernel, bias = self._fuse_bn_tensor(self.stem1[0], self.stem1[1])
         self.stem1[0].weight.data = kernel
         self.stem1[0].bias.data = bias
         kernel, bias = self._fuse_bn_tensor(self.stem2[0], self.stem2[1])
-        # TODO: understand it, very important!
         self.stem1[0].weight.data = torch.einsum('oi,icjk->ocjk', kernel.squeeze(3).squeeze(2),
                                                  self.stem1[0].weight.data)
         self.stem1[0].bias.data = bias + (self.stem1[0].bias.data.view(1, -1, 1, 1) * kernel).sum(3).sum(2).sum(1)
@@ -334,11 +345,17 @@ def vanillanet_13_x1_5_ada_pool(pretrained=False, in_22k=False, **kwargs):
 if __name__ == '__main__':
     net = vanillanet_5()
     net.eval()
+    for module in net.modules():
+        if isinstance(module, torch.nn.BatchNorm2d):
+            nn.init.uniform_(module.running_mean, 0, 0.1)
+            nn.init.uniform_(module.running_var, 0, 0.1)
+            nn.init.uniform_(module.weight, 0, 0.1)
+            nn.init.uniform_(module.bias, 0, 0.1)
     input = torch.rand([1, 3, 127, 127])
     val1 = net(input)
     net.switch_to_deploy()
     val2 = net(input)
-    print((val1 - val2))
+    print(((val1 - val2) ** 2).sum())
 
 """
 VanillaNet(

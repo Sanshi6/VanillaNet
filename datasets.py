@@ -13,6 +13,7 @@ from timm.data.constants import \
     IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, IMAGENET_INCEPTION_MEAN, IMAGENET_INCEPTION_STD
 from timm.data import create_transform
 
+
 def build_dataset(is_train, args):
     transform = build_transform(is_train, args)
 
@@ -75,11 +76,11 @@ def build_transform(is_train, args):
     t = []
     if resize_im:
         # warping (no cropping) when evaluated at 384 or larger
-        if args.input_size >= 384:  
+        if args.input_size >= 384:
             t.append(
-            transforms.Resize((args.input_size, args.input_size), 
-                            interpolation=transforms.InterpolationMode.BICUBIC), 
-        )
+                transforms.Resize((args.input_size, args.input_size),
+                                  interpolation=transforms.InterpolationMode.BICUBIC),
+            )
             print(f"Warping {args.input_size} size input images...")
         else:
             if args.crop_pct is None:
@@ -87,7 +88,7 @@ def build_transform(is_train, args):
             size = int(args.input_size / args.crop_pct)
             t.append(
                 # to maintain same ratio w.r.t. 224 images
-                transforms.Resize(size, interpolation=transforms.InterpolationMode.BICUBIC),  
+                transforms.Resize(size, interpolation=transforms.InterpolationMode.BICUBIC),
             )
             t.append(transforms.CenterCrop(args.input_size))
 

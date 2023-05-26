@@ -36,6 +36,7 @@ class Block(nn.Module):
 if __name__ == '__main__':
     input = torch.rand([1, 3, 127, 127])
     net = Block()
+
     out1 = net(input)
     net.switch_to_deploy()
     out2 = net(input)

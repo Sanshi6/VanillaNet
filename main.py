@@ -48,12 +48,14 @@ def str2bool(v):
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
+
 def get_args_parser():
     parser = argparse.ArgumentParser('Vanillanet script', add_help=False)
     parser.add_argument('--batch_size', default=64, type=int,
                         help='Per GPU batch size')
     parser.add_argument('--epochs', default=300, type=int)
     parser.add_argument('--early_stop_epochs', default=None, type=int)
+    # TODO: decay epoch, can learn it.
     parser.add_argument('--decay_epochs', default=100, type=int,
                         help='for deep training strategy')
     parser.add_argument('--decay_linear', type=str2bool, default=True,
@@ -190,6 +192,7 @@ def get_args_parser():
     parser.add_argument('--disable_eval', type=str2bool, default=False,
                         help='Disabling evaluation during training')
     parser.add_argument('--num_workers', default=10, type=int)
+    # TODO: learning it
     parser.add_argument('--pin_mem', type=str2bool, default=True,
                         help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
 
@@ -201,7 +204,7 @@ def get_args_parser():
     parser.add_argument('--dist_url', default='env://',
                         help='url used to set up distributed training')
 
-    parser.add_argument('--use_amp', type=str2bool, default=False, 
+    parser.add_argument('--use_amp', type=str2bool, default=False,
                         help="Use PyTorch's AMP (Automatic Mixed Precision) or not")
 
     # Weights and Biases arguments
@@ -209,12 +212,13 @@ def get_args_parser():
                         help="enable logging to Weights and Biases")
     parser.add_argument('--wandb_ckpt', type=str2bool, default=False,
                         help="Save model checkpoints as W&B Artifacts.")
-    
+
     parser.add_argument('--act_num', default=3, type=int)
     parser.add_argument('--real_labels', default='', type=str, metavar='FILENAME',
                         help='Real labels JSON file for imagenet evaluation')
 
     return parser
+
 
 def main(args):
     utils.init_distributed_mode(args)
@@ -225,8 +229,9 @@ def main(args):
     seed = args.seed + utils.get_rank()
     torch.manual_seed(seed)
     np.random.seed(seed)
+    # TODO: learn
     cudnn.benchmark = True
-        
+
     dataset_train, args.nb_classes = build_dataset(is_train=True, args=args)
     if args.disable_eval:
         args.dist_eval = False
@@ -236,7 +241,7 @@ def main(args):
 
     num_tasks = utils.get_world_size()
     global_rank = utils.get_rank()
-    
+
     sampler_train = torch.utils.data.DistributedSampler(
         dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True, seed=args.seed,
     )
@@ -244,8 +249,8 @@ def main(args):
     if args.dist_eval:
         if len(dataset_val) % num_tasks != 0:
             print('Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. '
-                    'This will slightly alter validation results as extra duplicate entries are added to achieve '
-                    'equal num of samples per-process.')
+                  'This will slightly alter validation results as extra duplicate entries are added to achieve '
+                  'equal num of samples per-process.')
         sampler_val = torch.utils.data.DistributedSampler(
             dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
     else:
@@ -291,13 +296,13 @@ def main(args):
             label_smoothing=args.smoothing, num_classes=args.nb_classes)
 
     model = create_model(
-        args.model, 
+        args.model,
         pretrained=False,
-        num_classes=args.nb_classes, 
+        num_classes=args.nb_classes,
         act_num=args.act_num,
         drop_rate=args.drop,
         deploy=args.deploy,
-        )
+    )
 
     if args.finetune:
         if args.finetune.startswith('https'):
@@ -321,13 +326,14 @@ def main(args):
                 print(f"Removing key {k} from pretrained checkpoint")
                 del checkpoint_model[k]
         utils.load_state_dict(model, checkpoint_model, prefix=args.model_prefix)
-    
+
+    # TODO: seem can learn
     model.to(device)
     if args.switch_to_deploy:
-      model.switch_to_deploy()
-      model_ckpt = dict()
-      model_ckpt['model'] = model.state_dict()
-      torch.save(model_ckpt, args.switch_to_deploy)
+        model.switch_to_deploy()
+        model_ckpt = dict()
+        model_ckpt['model'] = model.state_dict()
+        torch.save(model_ckpt, args.switch_to_deploy)
 
     model_ema = None
     if args.model_ema:
@@ -344,7 +350,8 @@ def main(args):
 
     print("Model = %s" % str(model_without_ddp))
     print('number of params (M): %.2f' % (n_parameters / 1.e6))
-    
+
+    # TODO: can learn
     if not args.eval:
         input_size = [2, 3, args.input_size, args.input_size]
         input = torch.randn(input_size).cuda()
@@ -352,6 +359,7 @@ def main(args):
         macs = profile_macs(model, input)
         print('model flops (G):', macs / 2 / 1.e9, 'input_size:', input_size)
 
+    #
     total_batch_size = args.batch_size * args.update_freq * utils.get_world_size()
     num_training_steps_per_epoch = len(dataset_train) // total_batch_size
     print("LR = %.8f" % args.lr)
@@ -360,9 +368,11 @@ def main(args):
     print("Number of training examples = %d" % len(dataset_train))
     print("Number of training training per epoch = %d" % num_training_steps_per_epoch)
 
+
     if args.layer_decay < 1.0 or args.layer_decay > 1.0:
         num_layers = args.layer_decay_num_layers
-        assigner = LayerDecayValueAssigner(num_max_layer=num_layers, values=list(args.layer_decay ** (num_layers + 1 - i) for i in range(num_layers + 2)))
+        assigner = LayerDecayValueAssigner(num_max_layer=num_layers, values=list(
+            args.layer_decay ** (num_layers + 1 - i) for i in range(num_layers + 2)))
     else:
         assigner = None
 
@@ -375,10 +385,10 @@ def main(args):
 
     optimizer = create_optimizer(
         args, model_without_ddp, skip_list=None,
-        get_num_layer=assigner.get_layer_id if assigner is not None else None, 
+        get_num_layer=assigner.get_layer_id if assigner is not None else None,
         get_layer_scale=assigner.get_scale if assigner is not None else None)
 
-    loss_scaler = NativeScaler() # if args.use_amp is False, this won't be used
+    loss_scaler = NativeScaler()  # if args.use_amp is False, this won't be used
 
     print("Use Cosine LR scheduler")
     lr_schedule_values = utils.cosine_scheduler(
@@ -391,7 +401,7 @@ def main(args):
     wd_schedule_values = utils.cosine_scheduler(
         args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
-    
+
     if mixup_fn is not None:
         if args.bce_loss:
             criterion = BinaryCrossEntropy(target_threshold=args.bce_target_thresh)
@@ -408,7 +418,7 @@ def main(args):
     utils.auto_load_model(
         args=args, model=model, model_without_ddp=model_without_ddp,
         optimizer=optimizer, loss_scaler=loss_scaler, model_ema=model_ema)
-    
+
     if args.eval:
         sampler_val = torch.utils.data.SequentialSampler(dataset_val)
         data_loader_val = torch.utils.data.DataLoader(
@@ -444,13 +454,16 @@ def main(args):
             log_writer.set_step(epoch * num_training_steps_per_epoch * args.update_freq)
         if wandb_logger:
             wandb_logger.set_steps()
-        if 'VanillaNet' == model.module.__class__. __name__ and epoch <= args.decay_epochs:
+
+        # TODO: set act learn, why, total epoch = 300, decay_epochs = 100, 200?
+        if 'VanillaNet' == model.module.__class__.__name__ and epoch <= args.decay_epochs:
             if args.decay_linear:
                 act_learn = epoch / args.decay_epochs * 1.0
             else:
                 act_learn = 0.5 * (1 - math.cos(math.pi * epoch / args.decay_epochs)) * 1.0
             print(f"VanillaNet decay_linear: {args.decay_linear}, act_learn weight: {act_learn:.3f}")
             model.module.change_act(act_learn)
+
         train_stats = train_one_epoch(
             model, criterion, data_loader_train, optimizer,
             device, epoch, loss_scaler, args.clip_grad, model_ema, mixup_fn,
@@ -459,13 +472,13 @@ def main(args):
             num_training_steps_per_epoch=num_training_steps_per_epoch, update_freq=args.update_freq,
             use_amp=args.use_amp
         )
-        
+
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
                 utils.save_model(
                     args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                     loss_scaler=loss_scaler, epoch=epoch, epoch_name=str(epoch), model_ema=model_ema[0])
-        
+
         if (data_loader_val is not None) and (epoch > 0) and (epoch % args.test_freq == 0 or epoch > args.test_epoch):
             test_stats = evaluate(data_loader_val, model, device, use_amp=args.use_amp)
             print(f"Accuracy of the model on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
@@ -486,7 +499,8 @@ def main(args):
             if args.model_ema and args.model_ema_eval:
                 for idx, iter_model_ema in enumerate(model_ema):
                     test_stats_ema = evaluate(data_loader_val, iter_model_ema.ema, device, use_amp=args.use_amp)
-                    print(f"Accuracy of the {args.model_ema_decay[idx]} EMA on {len(dataset_val)} test images: {test_stats_ema['acc1']:.1f}%")
+                    print(
+                        f"Accuracy of the {args.model_ema_decay[idx]} EMA on {len(dataset_val)} test images: {test_stats_ema['acc1']:.1f}%")
                     if max_accuracy_ema < test_stats_ema["acc1"]:
                         max_accuracy_ema = test_stats_ema["acc1"]
                         max_accuracy_ema_epoch = epoch
@@ -495,8 +509,9 @@ def main(args):
                             utils.save_model(
                                 args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                                 loss_scaler=loss_scaler, epoch=epoch, epoch_name="best-ema", model_ema=iter_model_ema)
-                
-                print(f'Max Acc: {max_accuracy:.3f}% @{max_accuracy_epoch}, {best_ema_decay} EMA: {max_accuracy_ema:.3f}% @{max_accuracy_ema_epoch}')
+
+                print(
+                    f'Max Acc: {max_accuracy:.3f}% @{max_accuracy_epoch}, {best_ema_decay} EMA: {max_accuracy_ema:.3f}% @{max_accuracy_ema_epoch}')
                 if log_writer is not None:
                     log_writer.update(ema_test_acc1=test_stats_ema['acc1'], head="perf", step=epoch)
                 log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
@@ -521,7 +536,7 @@ def main(args):
 
         if wandb_logger:
             wandb_logger.log_epoch_metrics(log_stats)
-            
+
         if args.early_stop_epochs and epoch == args.early_stop_epochs:
             break
 
@@ -531,7 +546,7 @@ def main(args):
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
-    
+
     time.sleep(10)
     if args.real_labels and args.model_ema_eval:
         sampler_val = torch.utils.data.SequentialSampler(dataset_val)

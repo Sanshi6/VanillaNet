@@ -9,7 +9,7 @@ import torch
 import torchvision
 import time
 
-import models.vanillanet
+from models.vanillanet import vanillanet_5
 
 
 if __name__ == "__main__":
